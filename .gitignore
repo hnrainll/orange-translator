@@ -12,6 +12,7 @@ wheels/
 # EPUB files
 *.epub
 *.ot-progress.json
+*.ot-cache/
 
 # Cache
 .mypy_cache/

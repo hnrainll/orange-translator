@@ -14,17 +14,15 @@ from sse_starlette.sse import EventSourceResponse
 
 from core.config import OllamaConfig, OpenAIConfig, TranslateConfig
 from core.pipeline import ProgressEvent, TranslationPipeline
-from core.translator.base import TranslationMode, TranslatorConfig
+from core.translator.base import TranslatorConfig
 from core.translator.ollama import OllamaTranslator
 from core.translator.openai_compat import OpenAICompatTranslator
 
 router = APIRouter(prefix="/api", tags=["translate"])
 
-# 临时文件目录
 WORK_DIR = Path("/tmp/orange-translator")
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 
-# 任务状态存储（内存，生产环境可替换为 Redis）
 _tasks: dict[str, dict] = {}
 
 
@@ -33,9 +31,9 @@ async def start_translate(
     file: UploadFile,
     src: str = Form("en"),
     tgt: str = Form("zh"),
-    mode: str = Form("speed"),
     engine: str = Form("ollama"),
     model: str = Form(""),
+    temperature: float = Form(0.3),
     ollama_url: str = Form("http://localhost:11434"),
     api_key: str = Form(""),
     api_base: str = Form("https://api.openai.com/v1"),
@@ -45,25 +43,19 @@ async def start_translate(
     task_dir = WORK_DIR / task_id
     task_dir.mkdir()
 
-    # 保存上传文件
     epub_path = task_dir / (file.filename or "input.epub")
-    content = await file.read()
-    epub_path.write_bytes(content)
-
+    epub_path.write_bytes(await file.read())
     output_path = task_dir / f"{epub_path.stem}_bilingual.epub"
 
-    translation_mode = TranslationMode(mode)
     config = TranslateConfig(
         src_lang=src,
         tgt_lang=tgt,
-        mode=translation_mode,
         engine=engine,
         ollama=OllamaConfig(base_url=ollama_url, model=model),
         openai=OpenAIConfig(api_key=api_key, base_url=api_base, model=model or "gpt-4o-mini"),
     )
-    translator_config = TranslatorConfig(src_lang=src, tgt_lang=tgt, mode=translation_mode, model=model)
+    translator_config = TranslatorConfig(src_lang=src, tgt_lang=tgt, model=model, temperature=temperature)
 
-    # 初始化任务状态
     _tasks[task_id] = {
         "status": "pending",
         "events": [],
@@ -71,7 +63,6 @@ async def start_translate(
         "filename": f"{epub_path.stem}_bilingual.epub",
     }
 
-    # 后台启动翻译
     asyncio.create_task(_run_translation(
         task_id, epub_path, output_path, translator_config, config, engine,
         ollama_url, api_key, api_base,
@@ -91,14 +82,11 @@ async def get_progress(task_id: str):
         while True:
             task = _tasks.get(task_id, {})
             events = task.get("events", [])
-
             while sent < len(events):
                 yield {"data": json.dumps(events[sent], ensure_ascii=False)}
                 sent += 1
-
             if task.get("status") in ("done", "error"):
                 break
-
             await asyncio.sleep(0.3)
 
     return EventSourceResponse(event_generator())
@@ -112,21 +100,14 @@ async def download_result(task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
     if task["status"] != "done":
         raise HTTPException(status_code=400, detail="Translation not completed yet")
-
     output_path = Path(task["output_path"])
     if not output_path.exists():
         raise HTTPException(status_code=404, detail="Output file not found")
-
-    return FileResponse(
-        path=output_path,
-        filename=task["filename"],
-        media_type="application/epub+zip",
-    )
+    return FileResponse(path=output_path, filename=task["filename"], media_type="application/epub+zip")
 
 
 @router.get("/translate/{task_id}/status")
 async def get_status(task_id: str) -> dict:
-    """获取任务状态。"""
     task = _tasks.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -135,14 +116,10 @@ async def get_status(task_id: str) -> dict:
 
 @router.get("/models")
 async def list_models(ollama_url: str = "http://localhost:11434") -> dict:
-    """列出本地 Ollama 可用模型。"""
-    from core.translator.ollama import OllamaTranslator
     t = OllamaTranslator(TranslatorConfig(), base_url=ollama_url)
     models = await t.list_models()
     return {"models": models}
 
-
-# ── 内部工具 ────────────────────────────────────────────────────────────────
 
 async def _run_translation(
     task_id: str,

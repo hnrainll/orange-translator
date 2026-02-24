@@ -13,7 +13,7 @@ import asyncio
 
 import httpx
 
-from core.translator.base import TranslationMode, TranslatorBase, TranslatorConfig
+from core.translator.base import TranslatorBase, TranslatorConfig
 
 DEFAULT_MODEL = "gpt-4o-mini"
 
@@ -45,7 +45,7 @@ class OpenAICompatTranslator(TranslatorBase):
                 {"role": "system", "content": self._build_system_prompt()},
                 {"role": "user", "content": text},
             ],
-            "temperature": self.config.effective_temperature(),
+            "temperature": self.config.temperature,
         }
         resp = await self._client.post(f"{self.base_url}/chat/completions", json=payload)
         resp.raise_for_status()
@@ -53,14 +53,8 @@ class OpenAICompatTranslator(TranslatorBase):
         return data["choices"][0]["message"]["content"].strip()
 
     async def translate_batch(self, texts: list[str]) -> list[str]:
-        if self.config.mode == TranslationMode.SPEED:
-            tasks = [self.translate(t) for t in texts]
-            return list(await asyncio.gather(*tasks))
-        else:
-            results = []
-            for text in texts:
-                results.append(await self.translate(text))
-            return results
+        tasks = [self.translate(t) for t in texts]
+        return list(await asyncio.gather(*tasks))
 
     async def aclose(self) -> None:
         await self._client.aclose()

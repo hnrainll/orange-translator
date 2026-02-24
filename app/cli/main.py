@@ -27,7 +27,7 @@ from rich.table import Table
 
 from core.config import LANGUAGE_MAP, OllamaConfig, OpenAIConfig, TranslateConfig
 from core.pipeline import ProgressEvent, TranslationPipeline
-from core.translator.base import TranslationMode, TranslatorConfig
+from core.translator.base import TranslatorConfig
 from core.translator.ollama import OllamaTranslator
 from core.translator.openai_compat import OpenAICompatTranslator
 
@@ -45,8 +45,8 @@ def translate(
     src: str = typer.Option("en", "--from", "-f", help="源语言代码（如 en, ja, fr）"),
     tgt: str = typer.Option("zh", "--to", "-t", help="目标语言代码（如 zh, en, de）"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="输出路径（默认：原文件名_bilingual.epub）"),
-    mode: TranslationMode = typer.Option(TranslationMode.SPEED, "--mode", "-m", help="翻译模式：speed / quality"),
-    model: str = typer.Option("", "--model", help="指定模型（如 qwen2.5:72b），空表示按模式自动选择"),
+    model: str = typer.Option("", "--model", help="指定模型（如 translategemma:12b），空表示使用默认模型"),
+    temperature: float = typer.Option(0.3, "--temperature", help="生成温度（0.0 ~ 1.0）"),
     engine: str = typer.Option("ollama", "--engine", "-e", help="翻译引擎：ollama / openai"),
     ollama_url: str = typer.Option("http://localhost:11434", "--ollama-url", help="Ollama 服务地址"),
     api_key: str = typer.Option("", "--api-key", help="OpenAI 兼容引擎的 API Key", envvar="OT_API_KEY"),
@@ -54,32 +54,32 @@ def translate(
 ) -> None:
     """翻译 EPUB 文件，生成双语版本。"""
 
-    # 确定输出路径
     if output is None:
         output = epub.parent / f"{epub.stem}_bilingual.epub"
 
     config = TranslateConfig(
         src_lang=src,
         tgt_lang=tgt,
-        mode=mode,
         engine=engine,
         ollama=OllamaConfig(base_url=ollama_url, model=model),
         openai=OpenAIConfig(api_key=api_key, base_url=api_base, model=model or "gpt-4o-mini"),
     )
 
-    # 构建翻译器
     translator_config = TranslatorConfig(
         src_lang=src,
         tgt_lang=tgt,
-        mode=mode,
         model=model,
+        temperature=temperature,
     )
 
     console.print(f"\n[bold]orange-translator[/bold]")
     console.print(f"  输入：{epub}")
     console.print(f"  输出：{output}")
-    console.print(f"  语言：{src} → {tgt}")
-    console.print(f"  模式：{mode.value}  引擎：{engine}\n")
+    console.print(f"  语言：{src} → {tgt}  引擎：{engine}")
+    if model:
+        console.print(f"  模型：{model}  temperature：{temperature}\n")
+    else:
+        console.print(f"  temperature：{temperature}\n")
 
     with Progress(
         SpinnerColumn(),
@@ -95,14 +95,12 @@ def translate(
         block_task = progress.add_task("  段落翻译", total=None, visible=False)
 
         def on_progress(event: ProgressEvent) -> None:
-            # 更新章节进度
             progress.update(
                 chapter_task,
                 total=event.chapter_total,
                 completed=event.chapter_index + (1 if event.status in ("done", "skipped") else 0),
                 description=f"章节 [{event.chapter_index + 1}/{event.chapter_total}] {_short_name(event.chapter_title)}",
             )
-            # 更新段落进度
             if event.block_total > 0:
                 progress.update(
                     block_task,
@@ -155,11 +153,8 @@ def models(
     ollama_url: str = typer.Option("http://localhost:11434", "--ollama-url", help="Ollama 服务地址"),
 ) -> None:
     """列出本地 Ollama 可用模型。"""
-    from core.translator.ollama import OllamaTranslator
-
     async def _list() -> list[str]:
-        cfg = TranslatorConfig()
-        t = OllamaTranslator(cfg, base_url=ollama_url)
+        t = OllamaTranslator(TranslatorConfig(), base_url=ollama_url)
         return await t.list_models()
 
     result = asyncio.run(_list())
@@ -186,6 +181,5 @@ def languages() -> None:
 
 
 def _short_name(path: str) -> str:
-    """取文件名部分，限制长度。"""
     name = Path(path).name
     return name[:40] + "…" if len(name) > 40 else name

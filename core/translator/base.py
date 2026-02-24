@@ -2,29 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import Enum
-
-
-class TranslationMode(str, Enum):
-    SPEED = "speed"
-    QUALITY = "quality"
 
 
 @dataclass
 class TranslatorConfig:
     src_lang: str = "en"
     tgt_lang: str = "zh"
-    mode: TranslationMode = TranslationMode.SPEED
     model: str = ""             # 空字符串表示使用引擎默认值
-    temperature: float = -1.0   # -1 表示使用模式默认值
+    temperature: float = 0.3
     extra: dict = field(default_factory=dict)
-
-    def effective_temperature(self) -> float:
-        if self.temperature >= 0:
-            return self.temperature
-        return 0.3 if self.mode == TranslationMode.SPEED else 0.7
 
 
 class TranslatorBase(ABC):
@@ -35,40 +24,53 @@ class TranslatorBase(ABC):
 
     @abstractmethod
     async def translate(self, text: str) -> str:
-        """翻译一段文本（可包含内联 HTML 标签）。
-
-        Args:
-            text: 原始文本或含内联标签的 HTML 片段
-
-        Returns:
-            译文（保留内联 HTML 结构）
-        """
+        """翻译一段文本（可包含内联 HTML 标签）。"""
 
     @abstractmethod
     async def translate_batch(self, texts: list[str]) -> list[str]:
-        """批量翻译，默认实现逐条调用 translate()。"""
+        """批量翻译。"""
 
     async def health_check(self) -> bool:
-        """检查服务是否可用，默认返回 True。"""
         return True
 
     def _build_system_prompt(self) -> str:
         src = self.config.src_lang
         tgt = self.config.tgt_lang
-        mode = self.config.mode
+        return (
+            f"You are a professional translator specializing in {src} to {tgt} translation. "
+            f"Produce a natural, fluent translation that reads well in {tgt}. "
+            f"Preserve any HTML inline tags (like <em>, <strong>, <a>, etc.) exactly as-is. "
+            f"Maintain the author's tone and style. "
+            f"Output only the translated text, no explanations or notes."
+        )
 
-        if mode == TranslationMode.SPEED:
-            return (
-                f"You are a professional translator. "
-                f"Translate the following text from {src} to {tgt}. "
-                f"Preserve any HTML inline tags (like <em>, <strong>, <a>, etc.) exactly as-is. "
-                f"Output only the translated text, no explanations."
-            )
-        else:
-            return (
-                f"You are a professional literary translator specializing in {src} to {tgt} translation. "
-                f"Produce a natural, fluent translation that reads well in {tgt}. "
-                f"Preserve any HTML inline tags (like <em>, <strong>, <a>, etc.) exactly as-is. "
-                f"Maintain the author's tone and style. "
-                f"Output only the translated text, no explanations or notes."
-            )
+    def _build_batch_system_prompt(self) -> str:
+        src = self.config.src_lang
+        tgt = self.config.tgt_lang
+        return (
+            f"You are a professional translator specializing in {src} to {tgt} translation. "
+            f"You will receive multiple text segments, each preceded by a marker like [1], [2], etc. "
+            f"Translate each segment to {tgt} and output each translation preceded by its marker. "
+            f"Preserve any HTML inline tags (like <em>, <strong>, <a>, etc.) exactly as-is. "
+            f"Maintain the author's tone and style. "
+            f"Output only the labeled translations, no explanations or notes."
+        )
+
+    @staticmethod
+    def _parse_batch_response(raw: str, expected: int) -> list[str]:
+        """将模型返回的 [N] 编号译文解析为列表，失败时抛出 ValueError。"""
+        segments = re.split(r'\[(\d+)\]', raw)
+        # segments: ['preamble', '1', 'text1', '2', 'text2', ...]
+        results: dict[int, str] = {}
+        for i in range(1, len(segments), 2):
+            try:
+                idx = int(segments[i])
+                content = segments[i + 1].strip() if i + 1 < len(segments) else ""
+                results[idx] = content
+            except (ValueError, IndexError):
+                continue
+        if len(results) == expected and all((i + 1) in results for i in range(expected)):
+            return [results[i + 1] for i in range(expected)]
+        raise ValueError(
+            f"Batch parse failed: expected {expected}, got indices {sorted(results.keys())}"
+        )

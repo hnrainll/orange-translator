@@ -44,11 +44,8 @@
           </select>
         </div>
         <div class="field">
-          <label>翻译模式</label>
-          <select v-model="mode">
-            <option value="speed">Speed（快速）</option>
-            <option value="quality">Quality（高质量）</option>
-          </select>
+          <label>Temperature</label>
+          <input v-model.number="temperature" type="number" min="0" max="1" step="0.1" />
         </div>
         <div class="field">
           <label>翻译引擎</label>
@@ -178,7 +175,7 @@ const isDragging = ref(false)
 // 配置
 const srcLang = ref('en')
 const tgtLang = ref('zh')
-const mode = ref('speed')
+const temperature = ref(0.3)
 const engine = ref('ollama')
 const model = ref('')
 const ollamaUrl = ref('http://localhost:11434')
@@ -250,7 +247,7 @@ async function startTranslation() {
   formData.append('file', file.value)
   formData.append('src', srcLang.value)
   formData.append('tgt', tgtLang.value)
-  formData.append('mode', mode.value)
+  formData.append('temperature', String(temperature.value))
   formData.append('engine', engine.value)
   formData.append('model', model.value)
   formData.append('ollama_url', ollamaUrl.value)

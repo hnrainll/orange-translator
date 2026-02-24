@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from dataclasses import dataclass
@@ -23,7 +24,7 @@ from core.config import TranslateConfig
 from core.epub.extractor import extract_blocks
 from core.epub.packer import inject_css_link, insert_translation, pack
 from core.epub.parser import Chapter, ParsedEpub, parse
-from core.translator.base import TranslationMode, TranslatorBase, TranslatorConfig
+from core.translator.base import TranslatorBase, TranslatorConfig
 
 
 @dataclass
@@ -56,6 +57,7 @@ class TranslationPipeline:
         self.config = config
         self.on_progress = on_progress or (lambda e: None)
         self.progress_file = epub_path.with_suffix(".ot-progress.json")
+        self.cache_dir = epub_path.with_suffix(".ot-cache")
 
     async def run(self) -> Path:
         """执行完整翻译流程，返回输出文件路径。"""
@@ -65,12 +67,19 @@ class TranslationPipeline:
         # 2. 加载已完成章节（续翻支持）
         completed_entries, completed_paths = self._load_progress()
 
-        # 3. 翻译所有章节
+        # 3. 从磁盘缓存恢复已翻译章节内容
         chapter_contents: dict[str, bytes] = {}
+        for entry in completed_entries:
+            cache_file = self._cache_path(entry["path"])
+            if cache_file.exists():
+                chapter_contents[entry["path"]] = cache_file.read_bytes()
+
         total = len(parsed.chapters)
         entries_lock = asyncio.Lock()
+        error_count = 0
+        error_count_lock = asyncio.Lock()
 
-        semaphore = asyncio.Semaphore(self.config.effective_chapter_concurrency())
+        semaphore = asyncio.Semaphore(self.config.chapter_concurrency)
 
         async def translate_chapter(idx: int, chapter: Chapter) -> None:
             async with semaphore:
@@ -87,13 +96,18 @@ class TranslationPipeline:
                 try:
                     new_content = await self._translate_chapter(idx, total, chapter)
                     duration = round(time.monotonic() - start, 1)
-                    chapter_contents[chapter.abs_path] = new_content
                     async with entries_lock:
+                        self.cache_dir.mkdir(exist_ok=True)
+                        self._cache_path(chapter.abs_path).write_bytes(new_content)
+                        chapter_contents[chapter.abs_path] = new_content
                         completed_entries.append({"path": chapter.abs_path, "duration_sec": duration})
                         completed_paths.add(chapter.abs_path)
                         self._save_progress(completed_entries)
                 except Exception as e:
                     import traceback
+                    nonlocal error_count
+                    async with error_count_lock:
+                        error_count += 1
                     self.on_progress(ProgressEvent(
                         chapter_index=idx, chapter_total=total,
                         chapter_title=chapter.href,
@@ -108,9 +122,13 @@ class TranslationPipeline:
         # 4. 打包（即使部分章节失败，已翻译的章节仍正常输出）
         pack(parsed, chapter_contents, self.output_path, self.config.tgt_lang)
 
-        # 5. 清理进度文件
-        if self.progress_file.exists():
-            self.progress_file.unlink()
+        # 5. 清理进度文件和缓存目录（仅全部成功时清理，有失败时保留供续翻）
+        if error_count == 0:
+            if self.progress_file.exists():
+                self.progress_file.unlink()
+            if self.cache_dir.exists():
+                import shutil
+                shutil.rmtree(self.cache_dir)
 
         return self.output_path
 
@@ -127,7 +145,7 @@ class TranslationPipeline:
         inject_css_link(soup, css_rel_path)
 
         # 按批次翻译
-        batch_size = self.config.effective_batch_size()
+        batch_size = self.config.batch_size
         translated_count = 0
 
         for batch_start in range(0, n, batch_size):
@@ -172,6 +190,10 @@ class TranslationPipeline:
         self.progress_file.write_text(
             json.dumps({"completed": entries}, ensure_ascii=False, indent=2)
         )
+
+    def _cache_path(self, abs_path: str) -> Path:
+        key = hashlib.md5(abs_path.encode()).hexdigest()
+        return self.cache_dir / f"{key}.xhtml"
 
 
 def _relative_css_path(chapter_abs_path: str) -> str:
