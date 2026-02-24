@@ -23,7 +23,7 @@ class TranslateConfig:
     src_lang: str = "en"
     tgt_lang: str = "zh"
     engine: str = "ollama"          # "ollama" | "openai"
-    chapter_concurrency: int = 4
+    chapter_concurrency: int = 1
     batch_size: int = 10
 
     # 引擎配置
