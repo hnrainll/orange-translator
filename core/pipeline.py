@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from bs4 import BeautifulSoup
+from loguru import logger
 
 from core.config import TranslateConfig
 from core.epub.extractor import extract_blocks
@@ -61,6 +62,26 @@ class TranslationPipeline:
 
     async def run(self) -> Path:
         """执行完整翻译流程，返回输出文件路径。"""
+        log_fmt = "{time:HH:mm:ss.SSS} | {level:<7} | {message}"
+
+        # 日志 1：随缓存目录存放，成功后随缓存一起删除
+        self.cache_dir.mkdir(exist_ok=True)
+        cache_log_id = logger.add(
+            self.cache_dir / "translate.log",
+            level="DEBUG", encoding="utf-8", format=log_fmt,
+        )
+
+        # 日志 2：持久化到 log/ 目录，自动轮转，永久保留
+        log_dir = Path("log")
+        log_dir.mkdir(exist_ok=True)
+        persist_log_id = logger.add(
+            log_dir / "ot-translate.log",
+            level="DEBUG", encoding="utf-8", format=log_fmt,
+            rotation="10 MB", retention=10,
+        )
+
+        logger.info("=== 开始翻译 {} ===", self.epub_path.name)
+
         # 1. 解析 EPUB
         parsed = parse(self.epub_path)
 
@@ -84,6 +105,7 @@ class TranslationPipeline:
         async def translate_chapter(idx: int, chapter: Chapter) -> None:
             async with semaphore:
                 if chapter.abs_path in completed_paths:
+                    logger.info("skip   [{}/{}] {}", idx + 1, total, chapter.href)
                     self.on_progress(ProgressEvent(
                         chapter_index=idx, chapter_total=total,
                         chapter_title=chapter.href,
@@ -92,10 +114,12 @@ class TranslationPipeline:
                     ))
                     return
 
+                logger.info("start  [{}/{}] {}", idx + 1, total, chapter.href)
                 start = time.monotonic()
                 try:
                     new_content = await self._translate_chapter(idx, total, chapter)
                     duration = round(time.monotonic() - start, 1)
+                    logger.info("done   [{}/{}] {}  {:.1f}s", idx + 1, total, chapter.href, duration)
                     async with entries_lock:
                         self.cache_dir.mkdir(exist_ok=True)
                         self._cache_path(chapter.abs_path).write_bytes(new_content)
@@ -108,6 +132,7 @@ class TranslationPipeline:
                     nonlocal error_count
                     async with error_count_lock:
                         error_count += 1
+                    logger.error("error  [{}/{}] {}  {}", idx + 1, total, chapter.href, e)
                     self.on_progress(ProgressEvent(
                         chapter_index=idx, chapter_total=total,
                         chapter_title=chapter.href,
@@ -125,8 +150,15 @@ class TranslationPipeline:
         # 5. 清理缓存目录（含进度文件，仅全部成功时清理，有失败时保留供续翻）
         if error_count == 0 and self.cache_dir.exists():
             import shutil
+            logger.info("=== 翻译完成，清理缓存 ===")
+            logger.remove(cache_log_id)
             shutil.rmtree(self.cache_dir)
+        else:
+            logger.info("=== 翻译结束（errors={}），缓存日志保留于 {} ===",
+                        error_count, self.cache_dir / "translate.log")
+            logger.remove(cache_log_id)
 
+        logger.remove(persist_log_id)
         return self.output_path
 
     async def _translate_chapter(self, idx: int, total: int, chapter: Chapter) -> bytes:
@@ -148,6 +180,11 @@ class TranslationPipeline:
         for batch_start in range(0, n, batch_size):
             batch = blocks[batch_start: batch_start + batch_size]
             texts = [b.inner_html for b in batch]
+            batch_chars = sum(len(t) for t in texts)
+            batch_num = batch_start // batch_size + 1
+            batch_total = -(-n // batch_size)
+
+            logger.debug("  batch {}/{} segs={} chars={}", batch_num, batch_total, len(texts), batch_chars)
 
             self.on_progress(ProgressEvent(
                 chapter_index=idx, chapter_total=total,
@@ -156,7 +193,9 @@ class TranslationPipeline:
                 status="translating",
             ))
 
+            t_batch = time.monotonic()
             translations = await self.translator.translate_batch(texts)
+            logger.debug("  batch {}/{} done  {:.2f}s", batch_num, batch_total, time.monotonic() - t_batch)
 
             for block, translation in zip(batch, translations):
                 insert_translation(soup, block.tag, translation, self.config.tgt_lang)

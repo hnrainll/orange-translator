@@ -22,18 +22,11 @@ TRANSLATION_CSS = """\
 .ot-translation {
     color: #2563eb;
     font-size: 0.95em;
+    font-weight: normal;
     margin-top: 0.1em;
     margin-bottom: 0.6em;
-    border-left: 3px solid #93c5fd;
-    padding-left: 0.6em;
-}
-/* 居中文字不加左边框，改用底部细线 */
-.ot-translation[style*="center"],
-.ot-translation[align="center"] {
-    border-left: none;
-    padding-left: 0;
-    border-bottom: 1px solid #93c5fd;
-    padding-bottom: 0.2em;
+    text-indent: 0;
+    opacity: 0.9;
 }
 """
 
@@ -41,16 +34,22 @@ CSS_FILENAME = "ot-translation.css"
 
 
 def insert_translation(soup: BeautifulSoup, original_tag: Tag, translated_html: str, target_lang: str) -> None:
-    """在 original_tag 之后插入译文节点，继承原节点的排版属性。"""
-    new_tag = soup.new_tag(original_tag.name)
-    new_tag["class"] = "ot-translation"
-    new_tag["lang"] = target_lang
+    """在 original_tag 之后插入译文节点，克隆原节点全部属性。"""
+    # 克隆原节点所有属性，避免逐一枚举可能遗漏的属性
+    attrs = dict(original_tag.attrs)
 
-    # 继承影响排版的属性：内联样式（含 text-align）、align 属性
-    if original_tag.get("style"):
-        new_tag["style"] = original_tag["style"]
-    if original_tag.get("align"):
-        new_tag["align"] = original_tag["align"]
+    # id 不复制（避免文档内重复 id）
+    attrs.pop("id", None)
+
+    # class：追加 ot-translation
+    raw_class = attrs.get("class") or []
+    classes = raw_class.split() if isinstance(raw_class, str) else list(raw_class)
+    attrs["class"] = " ".join(classes + ["ot-translation"])
+
+    # 语言标记
+    attrs["lang"] = target_lang
+
+    new_tag = soup.new_tag(original_tag.name, **attrs)
 
     # 解析译文内容并填充
     frag = BeautifulSoup(f"<div>{translated_html}</div>", "lxml")

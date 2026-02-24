@@ -9,6 +9,7 @@ dependencies = [
     "ebooklib>=0.20",
     "fastapi>=0.132.0",
     "httpx>=0.28.1",
+    "loguru>=0.7.3",
     "lxml>=6.0.2",
     "python-multipart>=0.0.22",
     "rich>=14.3.3",
