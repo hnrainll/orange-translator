@@ -56,8 +56,8 @@ class TranslationPipeline:
         self.translator = translator
         self.config = config
         self.on_progress = on_progress or (lambda e: None)
-        self.progress_file = epub_path.with_suffix(".ot-progress.json")
         self.cache_dir = epub_path.with_suffix(".ot-cache")
+        self.progress_file = self.cache_dir / "progress.json"
 
     async def run(self) -> Path:
         """执行完整翻译流程，返回输出文件路径。"""
@@ -122,13 +122,10 @@ class TranslationPipeline:
         # 4. 打包（即使部分章节失败，已翻译的章节仍正常输出）
         pack(parsed, chapter_contents, self.output_path, self.config.tgt_lang)
 
-        # 5. 清理进度文件和缓存目录（仅全部成功时清理，有失败时保留供续翻）
-        if error_count == 0:
-            if self.progress_file.exists():
-                self.progress_file.unlink()
-            if self.cache_dir.exists():
-                import shutil
-                shutil.rmtree(self.cache_dir)
+        # 5. 清理缓存目录（含进度文件，仅全部成功时清理，有失败时保留供续翻）
+        if error_count == 0 and self.cache_dir.exists():
+            import shutil
+            shutil.rmtree(self.cache_dir)
 
         return self.output_path
 
