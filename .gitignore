@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# EPUB files
+*.epub
+*.ot-progress.json
+
+# Cache
+.mypy_cache/
+
+# Claude local settings
+.claude/
+
+# macOS
+.DS_Store
