@@ -45,6 +45,9 @@ class OllamaTranslator(TranslatorBase):
         """向 Ollama 发送一次流式请求，返回完整响应文本。"""
         model = self._effective_model()
         input_chars = len(user_content)
+        # 总超时：输入每 10 字符给 1 秒，最少 120s，最多 600s
+        # 防止模型陷入无限生成循环（每个 chunk 都在 read timeout 内，但永不结束）
+        total_timeout = max(120.0, min(input_chars / 10, 600.0))
         payload = {
             "model": model,
             "messages": [
@@ -59,21 +62,33 @@ class OllamaTranslator(TranslatorBase):
         t_start = time.monotonic()
         t_first_token: float | None = None
 
-        logger.debug("request  model={} input={}chars", model, input_chars)
-        async with self._client.stream("POST", f"{self.base_url}/api/chat", json=payload) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line:
-                    continue
-                data = json.loads(line)
-                if content := data.get("message", {}).get("content"):
-                    if t_first_token is None:
-                        t_first_token = time.monotonic()
-                        logger.debug("  TTFT={:.2f}s", t_first_token - t_start)
-                    parts.append(content)
-                    token_count += 1
-                if data.get("done"):
-                    break
+        logger.debug("request  model={} input={}chars timeout={:.0f}s", model, input_chars, total_timeout)
+
+        async def _stream() -> None:
+            async with self._client.stream("POST", f"{self.base_url}/api/chat", json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    if content := data.get("message", {}).get("content"):
+                        nonlocal t_first_token
+                        if t_first_token is None:
+                            t_first_token = time.monotonic()
+                            logger.debug("  TTFT={:.2f}s", t_first_token - t_start)
+                        parts.append(content)
+                        token_count += 1
+                    if data.get("done"):
+                        break
+
+        try:
+            await asyncio.wait_for(_stream(), timeout=total_timeout)
+        except asyncio.TimeoutError:
+            elapsed = time.monotonic() - t_start
+            logger.warning(
+                "stream timeout after {:.0f}s (limit={:.0f}s), tokens={} — treating partial result as response",
+                elapsed, total_timeout, token_count,
+            )
 
         t_total = time.monotonic() - t_start
         output_chars = sum(len(p) for p in parts)
