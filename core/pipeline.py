@@ -241,33 +241,42 @@ class TranslationPipeline:
             f" char_splits={chars_splits}" if chars_splits else "",
         )
 
+        # 并发处理批次（Ollama 默认 max_concurrent=1 会保持串行，OpenAI 等引擎可获得加速）
+        batch_semaphore = asyncio.Semaphore(4)
         translated_count = 0
-        chapter_t_start = time.monotonic()
+        count_lock = asyncio.Lock()
 
-        for batch_num, indices in enumerate(batches, 1):
+        async def process_batch(batch_num: int, indices: list[int]):
+            nonlocal translated_count
             batch_cleaned = [cleaned_texts[i] for i in indices]
             batch_chars_orig = sum(len(blocks[i].inner_html) for i in indices)
             batch_chars_cleaned = sum(len(t) for t in batch_cleaned)
 
-            logger.debug("  batch {}/{} segs={} chars={} cleaned={}",
-                         batch_num, batch_total, len(indices), batch_chars_orig, batch_chars_cleaned)
+            async with batch_semaphore:
+                logger.debug("  batch {}/{} segs={} chars={} cleaned={}",
+                             batch_num, batch_total, len(indices), batch_chars_orig, batch_chars_cleaned)
 
-            self.on_progress(ProgressEvent(
-                chapter_index=idx, chapter_total=total,
-                chapter_title=chapter.href,
-                block_index=translated_count, block_total=n,
-                status="translating",
-            ))
+                async with count_lock:
+                    self.on_progress(ProgressEvent(
+                        chapter_index=idx, chapter_total=total,
+                        chapter_title=chapter.href,
+                        block_index=translated_count, block_total=n,
+                        status="translating",
+                    ))
 
-            t_batch = time.monotonic()
-            translations = await self.translator.translate_batch(batch_cleaned)
-            logger.debug("  batch {}/{} done  {:.2f}s", batch_num, batch_total, time.monotonic() - t_batch)
+                t_batch = time.monotonic()
+                translations = await self.translator.translate_batch(batch_cleaned)
+                logger.debug("  batch {}/{} done  {:.2f}s", batch_num, batch_total, time.monotonic() - t_batch)
 
-            translations = [postprocess_translation(t, br_htmls[i]) for t, i in zip(translations, indices)]
+                translations = [postprocess_translation(t, br_htmls[i]) for t, i in zip(translations, indices)]
 
-            for i, translation in zip(indices, translations):
-                insert_translation(soup, blocks[i].tag, translation, self.config.tgt_lang)
-                translated_count += 1
+                async with count_lock:
+                    for i, translation in zip(indices, translations):
+                        insert_translation(soup, blocks[i].tag, translation, self.config.tgt_lang)
+                        translated_count += 1
+
+        tasks = [process_batch(i + 1, b) for i, b in enumerate(batches)]
+        await asyncio.gather(*tasks)
 
         self.on_progress(ProgressEvent(
             chapter_index=idx, chapter_total=total,
