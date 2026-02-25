@@ -51,12 +51,15 @@ def insert_translation(soup: BeautifulSoup, original_tag: Tag, translated_html: 
 
     new_tag = soup.new_tag(original_tag.name, **attrs)
 
-    # 解析译文内容并填充
-    frag = BeautifulSoup(f"<div>{translated_html}</div>", "lxml")
-    inner_div = frag.find("div")
-    if inner_div:
-        for child in inner_div.children:
-            new_tag.append(child.__copy__())
+    # 解析译文内容并填充。针对简单文本，跳过昂贵的 BeautifulSoup 解析。
+    if "<" not in translated_html:
+        new_tag.string = translated_html
+    else:
+        frag = BeautifulSoup(f"<div>{translated_html}</div>", "lxml")
+        inner_div = frag.find("div")
+        if inner_div:
+            for child in inner_div.children:
+                new_tag.append(child.__copy__())
     original_tag.insert_after(new_tag)
 
 
