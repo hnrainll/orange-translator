@@ -97,11 +97,16 @@ class TranslationPipeline:
         completed_entries, completed_paths = self._load_progress()
 
         # 3. 从磁盘缓存恢复已翻译章节内容
+        # 若 cache 文件缺失（如 .ot-cache 被部分清理），从 completed_paths 移除，
+        # 使该章节重新翻译，避免静默回退到原文
         chapter_contents: dict[str, bytes] = {}
         for entry in completed_entries:
             cache_file = self._cache_path(entry["path"])
             if cache_file.exists():
                 chapter_contents[entry["path"]] = cache_file.read_bytes()
+            else:
+                completed_paths.discard(entry["path"])
+                logger.warning("cache missing, will retranslate: {}", entry["path"])
 
         total = len(parsed.chapters)
         entries_lock = asyncio.Lock()
