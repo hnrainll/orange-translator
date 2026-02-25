@@ -4,11 +4,12 @@ EPUB 双语翻译工具，使用大模型将电子书翻译为目标语言，译
 
 ## 特性
 
-- **双语排版**：译文紧跟原文段落，保留原有 HTML 结构与样式（含居中、加粗等）
+- **双语排版**：译文紧跟原文段落，保留原有块级 HTML 结构与样式（含居中、加粗等）
+- **高质量翻译**：预处理阶段剥离装饰性内联标签，让 LLM 看到接近纯文本的输入，翻译更自然
 - **本地优先**：默认使用 [Ollama](https://ollama.com) 本地大模型（`translategemma:4b`），无需联网
 - **可扩展引擎**：支持任意 OpenAI 兼容接口（DeepSeek、硅基流动等）
 - **任意语言对**：不限翻译方向，支持 17 种常用语言
-- **续翻支持**：中断后自动从上次进度继续，并记录每章耗时
+- **续翻支持**：章节级磁盘缓存，中断后自动跳过已完成章节，支持大部头书籍分多次翻译
 - **双入口**：CLI 命令行工具 + Web UI
 
 ## 项目结构
@@ -60,11 +61,11 @@ ollama pull translategemma:4b
 ### CLI
 
 ```bash
-# 基础用法（英 → 中，speed 模式）
+# 基础用法（英 → 中）
 ot translate book.epub --from en --to zh
 
-# 指定模式和模型
-ot translate book.epub --from en --to zh --mode quality --model translategemma:12b
+# 指定模型
+ot translate book.epub --from en --to zh --model translategemma:12b
 
 # 指定输出路径
 ot translate book.epub -o book_bilingual.epub
@@ -88,18 +89,29 @@ uv run uvicorn app.web.app:app --reload --port 8000
 
 浏览器访问 [http://localhost:8000](http://localhost:8000)，上传 EPUB 文件并配置翻译参数，实时查看进度，完成后下载双语版本。
 
-## 翻译模式
+## 翻译参数
 
-| | Speed | Quality |
+默认值（`TranslateConfig`）：
+
+| 参数 | 默认值 | 说明 |
 |---|---|---|
-| 默认模型 | `translategemma:4b` | `translategemma:4b` |
-| 章节并发 | 4 | 1 |
-| 批量大小 | 10 段/批 | 3 段/批 |
-| temperature | 0.3 | 0.7 |
+| `chapter_concurrency` | `1` | 章节并发数，Ollama 本地模型建议保持 1 |
+| `batch_size` | `7` | 每批最多段落数 |
+| `batch_char_limit` | `3000` | 每批剥离后字符数上限，超过则提前截断 |
+| `temperature` | `0.3` | 翻译温度 |
 
-## 进度文件
+## 缓存目录
 
-翻译过程中生成 `<epub名>.ot-progress.json`，按完成顺序记录每章耗时，支持中断续翻：
+翻译过程中在 `<epub名>.ot-cache/` 目录下生成以下文件：
+
+```
+book.ot-cache/
+├── progress.json        # 进度记录，按完成顺序记录每章耗时
+├── <md5>.xhtml          # 各章节翻译结果缓存（可断点续翻）
+└── translate.log        # 本次翻译日志（成功后随缓存一起删除）
+```
+
+`progress.json` 格式：
 
 ```json
 {
@@ -110,7 +122,10 @@ uv run uvicorn app.web.app:app --reload --port 8000
 }
 ```
 
-翻译全部完成后该文件自动删除。
+- **全部成功**：翻译完成后缓存目录自动删除
+- **有章节失败**：缓存目录保留，重新运行时自动跳过已成功章节、重翻失败章节
+
+持久化日志保存在 `log/ot-translate.log`（自动轮转，保留最近 10 个文件）。
 
 ## 双语样式
 
