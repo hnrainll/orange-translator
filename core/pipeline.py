@@ -18,11 +18,14 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
-from bs4 import BeautifulSoup
 from loguru import logger
 
 from core.config import TranslateConfig
-from core.epub.extractor import extract_blocks, restore_inline_attrs, strip_inline_attrs
+from core.epub.extractor import (
+    extract_blocks,
+    restore_from_placeholders,
+    serialize_to_placeholders,
+)
 from core.epub.packer import inject_css_link, insert_translation, pack
 from core.epub.parser import Chapter, ParsedEpub, parse
 from core.translator.base import TranslatorBase, TranslatorConfig
@@ -187,13 +190,14 @@ class TranslationPipeline:
         css_rel_path = _relative_css_path(chapter.abs_path)
         inject_css_link(soup, css_rel_path)
 
-        # 预先剥离所有内联标签属性
-        stripped_texts: list[str] = []
-        tag_maps: list[list] = []
+        # 预处理：将内联标签序列化为 ⟦N⟧...⟦/N⟧ 占位符
+        # 透明标签（em/strong/a 等）保留内容供 LLM 翻译，不透明标签（sup/sub/br 等）整体占位
+        marked_texts: list[str] = []
+        ph_maps: list[dict] = []
         for b in blocks:
-            stripped, tag_map = strip_inline_attrs(b.inner_html)
-            stripped_texts.append(stripped)
-            tag_maps.append(tag_map)
+            marked, ph_map = serialize_to_placeholders(b.inner_html)
+            marked_texts.append(marked)
+            ph_maps.append(ph_map)
 
         # 按段数 + 字符数双重限制构建批次（避免超长 prompt 导致模型推理变慢）
         batch_size = self.config.batch_size
@@ -203,7 +207,7 @@ class TranslationPipeline:
         cur: list[int] = []
         cur_chars = 0
 
-        for i, text in enumerate(stripped_texts):
+        for i, text in enumerate(marked_texts):
             chars = len(text)
             if cur:
                 if len(cur) >= batch_size:
@@ -223,13 +227,13 @@ class TranslationPipeline:
 
         batch_total = len(batches)
         total_orig_chars = sum(len(b.inner_html) for b in blocks)
-        total_stripped_chars = sum(len(t) for t in stripped_texts)
-        chars_saved_pct = (1 - total_stripped_chars / total_orig_chars) * 100 if total_orig_chars else 0
+        total_marked_chars = sum(len(t) for t in marked_texts)
+        chars_saved_pct = (1 - total_marked_chars / total_orig_chars) * 100 if total_orig_chars else 0
         chars_splits = split_reasons.count("chars")
 
         logger.info(
-            "  chapter  segs={} batches={} chars={} stripped={} saved={:.0f}%{}",
-            n, batch_total, total_orig_chars, total_stripped_chars, chars_saved_pct,
+            "  chapter  segs={} batches={} chars={} marked={} saved={:.0f}%{}",
+            n, batch_total, total_orig_chars, total_marked_chars, chars_saved_pct,
             f" char_splits={chars_splits}" if chars_splits else "",
         )
 
@@ -237,12 +241,12 @@ class TranslationPipeline:
         chapter_t_start = time.monotonic()
 
         for batch_num, indices in enumerate(batches, 1):
-            batch_stripped = [stripped_texts[i] for i in indices]
+            batch_marked = [marked_texts[i] for i in indices]
             batch_chars_orig = sum(len(blocks[i].inner_html) for i in indices)
-            batch_chars_stripped = sum(len(t) for t in batch_stripped)
+            batch_chars_marked = sum(len(t) for t in batch_marked)
 
-            logger.debug("  batch {}/{} segs={} chars={} stripped={}",
-                         batch_num, batch_total, len(indices), batch_chars_orig, batch_chars_stripped)
+            logger.debug("  batch {}/{} segs={} chars={} marked={}",
+                         batch_num, batch_total, len(indices), batch_chars_orig, batch_chars_marked)
 
             self.on_progress(ProgressEvent(
                 chapter_index=idx, chapter_total=total,
@@ -252,10 +256,10 @@ class TranslationPipeline:
             ))
 
             t_batch = time.monotonic()
-            translations = await self.translator.translate_batch(batch_stripped)
+            translations = await self.translator.translate_batch(batch_marked)
             logger.debug("  batch {}/{} done  {:.2f}s", batch_num, batch_total, time.monotonic() - t_batch)
 
-            translations = [restore_inline_attrs(t, tag_maps[i]) for t, i in zip(translations, indices)]
+            translations = [restore_from_placeholders(t, ph_maps[i]) for t, i in zip(translations, indices)]
 
             for i, translation in zip(indices, translations):
                 insert_translation(soup, blocks[i].tag, translation, self.config.tgt_lang)
