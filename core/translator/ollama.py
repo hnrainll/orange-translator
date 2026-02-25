@@ -79,7 +79,8 @@ class OllamaTranslator(TranslatorBase):
         output_chars = sum(len(p) for p in parts)
         t_gen = t_total - (t_first_token - t_start if t_first_token else t_total)
         tok_per_sec = token_count / t_gen if t_gen > 0 else 0
-        logger.info(
+        log_fn = logger.warning if tok_per_sec < 40 and token_count > 20 else logger.info
+        log_fn(
             "done  model={} input={}chars output={}chars tokens={} TTFT={:.2f}s gen={:.2f}s speed={:.1f}tok/s total={:.2f}s",
             model, input_chars, output_chars, token_count,
             (t_first_token - t_start) if t_first_token else 0,
@@ -91,24 +92,32 @@ class OllamaTranslator(TranslatorBase):
         return await self._stream_chat(self._build_system_prompt(), text)
 
     async def translate_batch(self, texts: list[str]) -> list[str]:
-        """将多段文本合并成一次请求批量翻译，解析失败时逐段回退。"""
+        """将多段文本合并成一次请求批量翻译，解析失败时递归对半重试，最终保底逐段。"""
         async with self._sem:
-            if len(texts) == 1:
-                return [await self._do_translate(texts[0])]
-            total_chars = sum(len(t) for t in texts)
-            logger.debug("batch  segs={} total={}chars", len(texts), total_chars)
-            try:
-                user_content = "\n\n".join(f"[{i + 1}]\n{t}" for i, t in enumerate(texts))
-                raw = await self._stream_chat(self._build_batch_system_prompt(), user_content)
-                results = self._parse_batch_response(raw, len(texts))
-                logger.debug("batch parsed ok  segs={}", len(results))
-                return results
-            except Exception as e:
-                logger.warning("batch parse failed ({}), falling back to per-segment", e)
-                results = []
-                for t in texts:
-                    results.append(await self._do_translate(t))
-                return results
+            return await self._translate_batch_inner(texts)
+
+    async def _translate_batch_inner(self, texts: list[str]) -> list[str]:
+        """递归对半批量翻译。保证每段都翻译到（最终退化到单段调用）。"""
+        if len(texts) == 1:
+            return [await self._do_translate(texts[0])]
+
+        total_chars = sum(len(t) for t in texts)
+        logger.debug("batch  segs={} total={}chars", len(texts), total_chars)
+        try:
+            user_content = "\n\n".join(f"[{i + 1}]\n{t}" for i, t in enumerate(texts))
+            raw = await self._stream_chat(self._build_batch_system_prompt(), user_content)
+            results = self._parse_batch_response(raw, len(texts))
+            logger.debug("batch parsed ok  segs={}", len(results))
+            return results
+        except Exception as e:
+            mid = len(texts) // 2
+            logger.warning(
+                "batch parse failed ({}), splitting {} → {}/{}",
+                e, len(texts), mid, len(texts) - mid,
+            )
+            left = await self._translate_batch_inner(texts[:mid])
+            right = await self._translate_batch_inner(texts[mid:])
+            return left + right
 
     async def health_check(self) -> bool:
         try:

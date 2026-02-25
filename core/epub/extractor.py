@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import re
+from collections import defaultdict, deque
 from dataclasses import dataclass
 
 from bs4 import BeautifulSoup, NavigableString, Tag
@@ -64,6 +66,66 @@ def extract_blocks(html_content: bytes | str) -> tuple[BeautifulSoup, list[TextB
         blocks.append(TextBlock(tag=tag, inner_html=inner_html, text_content=text))
 
     return soup, blocks
+
+
+# 发送给 LLM 时去除属性的内联标签集合
+_INLINE_TAGS_STRIP_ATTRS = frozenset({
+    "em", "strong", "b", "i", "u", "span", "a", "small", "big",
+    "sub", "sup", "abbr", "cite", "q", "s", "del", "ins",
+})
+
+# 匹配带属性的开标签或自闭合标签
+_TAG_WITH_ATTRS_RE = re.compile(r"<([a-zA-Z][a-zA-Z0-9]*)(\s[^>]*)>")
+
+
+def strip_inline_attrs(html: str) -> tuple[str, list[tuple[str, str]]]:
+    """剥离内联标签上的属性，减少送入 LLM 的 token 数。
+
+    Returns:
+        (stripped_html, originals)
+        originals: list of (original_tag, stripped_tag) pairs，供 restore 使用
+    """
+    originals: list[tuple[str, str]] = []
+
+    def replacer(m: re.Match) -> str:
+        tag_name = m.group(1).lower()
+        if tag_name not in _INLINE_TAGS_STRIP_ATTRS:
+            return m.group(0)
+        full_tag = m.group(0)
+        stripped = f"<{tag_name}>"
+        if full_tag == stripped:
+            return full_tag
+        originals.append((full_tag, stripped))
+        return stripped
+
+    result = _TAG_WITH_ATTRS_RE.sub(replacer, html)
+    return result, originals
+
+
+def restore_inline_attrs(translated: str, originals: list[tuple[str, str]]) -> str:
+    """将剥离的属性按顺序还原到翻译结果中。
+
+    策略：对每种标签名维护一个 FIFO 队列，翻译结果中遇到同名无属性标签时取队头还原。
+    LLM 可能省略某些标签，剩余队列项直接丢弃（不影响正确性）。
+    """
+    if not originals:
+        return translated
+
+    # 按标签名分组，保持原顺序
+    queue: dict[str, deque[str]] = defaultdict(deque)
+    for orig, stripped in originals:
+        m = re.match(r"<([a-zA-Z]+)", stripped)
+        if m:
+            queue[m.group(1).lower()].append(orig)
+
+    def replacer(m: re.Match) -> str:
+        tag_name = m.group(1).lower()
+        if tag_name in queue and queue[tag_name]:
+            return queue[tag_name].popleft()
+        return m.group(0)
+
+    # 匹配无属性的开标签（含自闭合）
+    return re.sub(r"<([a-zA-Z][a-zA-Z0-9]*)\s*/?>", replacer, translated)
 
 
 def _has_ancestor(tag: Tag, tag_names: frozenset[str]) -> bool:

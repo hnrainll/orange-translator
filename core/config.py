@@ -24,7 +24,8 @@ class TranslateConfig:
     tgt_lang: str = "zh"
     engine: str = "ollama"          # "ollama" | "openai"
     chapter_concurrency: int = 1
-    batch_size: int = 10
+    batch_size: int = 7
+    batch_char_limit: int = 3000   # 每批剥离后字符数上限，超过则提前截断
 
     # 引擎配置
     ollama: OllamaConfig = field(default_factory=OllamaConfig)

@@ -22,7 +22,7 @@ from bs4 import BeautifulSoup
 from loguru import logger
 
 from core.config import TranslateConfig
-from core.epub.extractor import extract_blocks
+from core.epub.extractor import extract_blocks, restore_inline_attrs, strip_inline_attrs
 from core.epub.packer import inject_css_link, insert_translation, pack
 from core.epub.parser import Chapter, ParsedEpub, parse
 from core.translator.base import TranslatorBase, TranslatorConfig
@@ -81,6 +81,11 @@ class TranslationPipeline:
         )
 
         logger.info("=== 开始翻译 {} ===", self.epub_path.name)
+        logger.info(
+            "config  engine={} model={} concurrency={} batch_size={} batch_char_limit={}",
+            "ollama", getattr(self.config, "model", "default"),
+            self.config.chapter_concurrency, self.config.batch_size, self.config.batch_char_limit,
+        )
 
         # 1. 解析 EPUB
         parsed = parse(self.epub_path)
@@ -99,6 +104,7 @@ class TranslationPipeline:
         entries_lock = asyncio.Lock()
         error_count = 0
         error_count_lock = asyncio.Lock()
+        session_start = time.monotonic()
 
         semaphore = asyncio.Semaphore(self.config.chapter_concurrency)
 
@@ -144,6 +150,14 @@ class TranslationPipeline:
         tasks = [translate_chapter(i, ch) for i, ch in enumerate(parsed.chapters)]
         await asyncio.gather(*tasks)
 
+        session_elapsed = time.monotonic() - session_start
+        translated_count = len(completed_entries) - len([e for e in completed_entries
+                                                          if e.get("duration_sec") == 0])
+        logger.info(
+            "=== 会话结束  章节={}/{} 错误={} 耗时={:.1f}s ===",
+            len(completed_entries), total, error_count, session_elapsed,
+        )
+
         # 4. 打包（即使部分章节失败，已翻译的章节仍正常输出）
         pack(parsed, chapter_contents, self.output_path, self.config.tgt_lang)
 
@@ -173,18 +187,62 @@ class TranslationPipeline:
         css_rel_path = _relative_css_path(chapter.abs_path)
         inject_css_link(soup, css_rel_path)
 
-        # 按批次翻译
+        # 预先剥离所有内联标签属性
+        stripped_texts: list[str] = []
+        tag_maps: list[list] = []
+        for b in blocks:
+            stripped, tag_map = strip_inline_attrs(b.inner_html)
+            stripped_texts.append(stripped)
+            tag_maps.append(tag_map)
+
+        # 按段数 + 字符数双重限制构建批次（避免超长 prompt 导致模型推理变慢）
         batch_size = self.config.batch_size
+        char_limit = self.config.batch_char_limit
+        batches: list[list[int]] = []
+        split_reasons: list[str] = []  # 记录每次截断的原因，便于日志分析
+        cur: list[int] = []
+        cur_chars = 0
+
+        for i, text in enumerate(stripped_texts):
+            chars = len(text)
+            if cur:
+                if len(cur) >= batch_size:
+                    batches.append(cur)
+                    split_reasons.append("count")
+                    cur = []
+                    cur_chars = 0
+                elif cur_chars + chars > char_limit:
+                    batches.append(cur)
+                    split_reasons.append("chars")
+                    cur = []
+                    cur_chars = 0
+            cur.append(i)
+            cur_chars += chars
+        if cur:
+            batches.append(cur)
+
+        batch_total = len(batches)
+        total_orig_chars = sum(len(b.inner_html) for b in blocks)
+        total_stripped_chars = sum(len(t) for t in stripped_texts)
+        chars_saved_pct = (1 - total_stripped_chars / total_orig_chars) * 100 if total_orig_chars else 0
+        chars_splits = split_reasons.count("chars")
+
+        logger.info(
+            "  chapter  segs={} batches={} chars={} stripped={} saved={:.0f}%{}",
+            n, batch_total, total_orig_chars, total_stripped_chars, chars_saved_pct,
+            f" char_splits={chars_splits}" if chars_splits else "",
+        )
+
         translated_count = 0
+        chapter_t_start = time.monotonic()
 
-        for batch_start in range(0, n, batch_size):
-            batch = blocks[batch_start: batch_start + batch_size]
-            texts = [b.inner_html for b in batch]
-            batch_chars = sum(len(t) for t in texts)
-            batch_num = batch_start // batch_size + 1
-            batch_total = -(-n // batch_size)
+        for batch_num, indices in enumerate(batches, 1):
+            batch_stripped = [stripped_texts[i] for i in indices]
+            batch_chars_orig = sum(len(blocks[i].inner_html) for i in indices)
+            batch_chars_stripped = sum(len(t) for t in batch_stripped)
 
-            logger.debug("  batch {}/{} segs={} chars={}", batch_num, batch_total, len(texts), batch_chars)
+            logger.debug("  batch {}/{} segs={} chars={} stripped={}",
+                         batch_num, batch_total, len(indices), batch_chars_orig, batch_chars_stripped)
 
             self.on_progress(ProgressEvent(
                 chapter_index=idx, chapter_total=total,
@@ -194,11 +252,13 @@ class TranslationPipeline:
             ))
 
             t_batch = time.monotonic()
-            translations = await self.translator.translate_batch(texts)
+            translations = await self.translator.translate_batch(batch_stripped)
             logger.debug("  batch {}/{} done  {:.2f}s", batch_num, batch_total, time.monotonic() - t_batch)
 
-            for block, translation in zip(batch, translations):
-                insert_translation(soup, block.tag, translation, self.config.tgt_lang)
+            translations = [restore_inline_attrs(t, tag_maps[i]) for t, i in zip(translations, indices)]
+
+            for i, translation in zip(indices, translations):
+                insert_translation(soup, blocks[i].tag, translation, self.config.tgt_lang)
                 translated_count += 1
 
         self.on_progress(ProgressEvent(
