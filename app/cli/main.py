@@ -52,7 +52,7 @@ console = Console()
 # 避免 loguru 直接写 stderr 时破坏 Rich Progress 进度条的渲染
 logger.remove(0)
 logger.add(
-    lambda msg: console.print(msg, end=""),
+    lambda msg: console.log(msg, end=""),
     format="<green>{time:HH:mm:ss}</green> | <level>{level:<7}</level> | {message}",
     level="WARNING",
     colorize=True,

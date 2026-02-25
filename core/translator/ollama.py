@@ -94,8 +94,7 @@ class OllamaTranslator(TranslatorBase):
         output_chars = sum(len(p) for p in parts)
         t_gen = t_total - (t_first_token - t_start if t_first_token else t_total)
         tok_per_sec = token_count / t_gen if t_gen > 0 else 0
-        log_fn = logger.warning if tok_per_sec < 40 and token_count > 20 else logger.info
-        log_fn(
+        logger.info(
             "done  model={} input={}chars output={}chars tokens={} TTFT={:.2f}s gen={:.2f}s speed={:.1f}tok/s total={:.2f}s",
             model, input_chars, output_chars, token_count,
             (t_first_token - t_start) if t_first_token else 0,
