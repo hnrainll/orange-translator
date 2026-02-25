@@ -44,7 +44,39 @@ orange-translator/
 ```bash
 git clone https://github.com/yourname/orange-translator
 cd orange-translator
+```
+
+### 作为系统命令安装（推荐）
+
+将 `ot` 命令安装到 `~/.local/bin/`，在任意目录可用：
+
+```bash
+uv tool install .
+```
+
+如需修改代码后立即生效（无需重装），使用可编辑模式：
+
+```bash
+uv tool install . --editable
+```
+
+代码更新后重新安装：
+
+```bash
+uv tool install . --reinstall
+```
+
+如果 `ot` 命令找不到，确认 `~/.local/bin` 已加入 PATH（在 `~/.zshrc` 或 `~/.bashrc` 中添加）：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### 仅在项目目录使用
+
+```bash
 uv pip install -e .
+uv run ot translate book.epub --from en --to zh
 ```
 
 ## 使用
