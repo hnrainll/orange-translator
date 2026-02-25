@@ -1,7 +1,8 @@
 """orange-translator CLI 入口。
 
 命令：
-  ot translate <epub>   翻译 EPUB 文件
+  ot <epub>             翻译 EPUB 文件（简写，使用默认参数）
+  ot translate <epub>   翻译 EPUB 文件（完整形式，支持所有选项）
   ot models             列出本地 Ollama 可用模型
   ot languages          列出支持的语言代码
 """
@@ -9,10 +10,17 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from typing import Optional
 
 import typer
+
+# 若第一个参数看起来是 epub 文件（而非子命令），自动补全 "translate"
+# 使得 `ot book.epub` 等价于 `ot translate book.epub`
+_SUBCOMMANDS = {"translate", "models", "languages", "--help", "-h", "--version"}
+if len(sys.argv) > 1 and sys.argv[1] not in _SUBCOMMANDS and sys.argv[1].endswith(".epub"):
+    sys.argv.insert(1, "translate")
 from rich.console import Console
 from rich.progress import (
     BarColumn,
