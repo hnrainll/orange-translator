@@ -39,9 +39,7 @@ class TranslatorBase(ABC):
         return (
             f"You are a professional translator specializing in {src} to {tgt} translation. "
             f"Produce a natural, fluent translation that reads well in {tgt}. "
-            f"The text may contain XML-like formatting tags: "
-            f"<gN>...</gN> wraps formatted text — translate the content but keep the <gN> and </gN> tags exactly as-is; "
-            f"[OT:N] is a standalone opaque placeholder — copy it exactly where it appears, do not translate or remove it."
+            f"Preserve any <sup> and <sub> HTML tags exactly as they appear. "
             f"Maintain the author's tone and style. "
             f"Output only the translated text, no explanations or notes."
         )
@@ -53,9 +51,7 @@ class TranslatorBase(ABC):
             f"You are a professional translator specializing in {src} to {tgt} translation. "
             f"You will receive multiple text segments, each preceded by a marker like [1], [2], etc. "
             f"Translate each segment to {tgt} and output each translation preceded by its marker. "
-            f"The text may contain XML-like formatting tags: "
-            f"<gN>...</gN> wraps formatted text — translate the content but keep the <gN> and </gN> tags exactly as-is; "
-            f"[OT:N] is a standalone opaque placeholder — copy it exactly where it appears, do not translate or remove it."
+            f"Preserve any <sup> and <sub> HTML tags exactly as they appear. "
             f"Maintain the author's tone and style. "
             f"Output only the labeled translations, no explanations or notes."
         )
