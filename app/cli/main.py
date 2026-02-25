@@ -33,6 +33,8 @@ from rich.progress import (
 )
 from rich.table import Table
 
+from loguru import logger
+
 from core.config import LANGUAGE_MAP, OllamaConfig, OpenAIConfig, TranslateConfig
 from core.pipeline import ProgressEvent, TranslationPipeline
 from core.translator.base import TranslatorConfig
@@ -45,6 +47,16 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+# 移除 loguru 默认的 stderr handler，改为通过 Rich Console 输出
+# 避免 loguru 直接写 stderr 时破坏 Rich Progress 进度条的渲染
+logger.remove(0)
+logger.add(
+    lambda msg: console.print(msg, end=""),
+    format="<green>{time:HH:mm:ss}</green> | <level>{level:<7}</level> | {message}",
+    level="WARNING",
+    colorize=True,
+)
 
 
 @app.command()
