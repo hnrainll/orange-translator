@@ -72,7 +72,7 @@ class OllamaTranslator(TranslatorBase):
                         continue
                     data = json.loads(line)
                     if content := data.get("message", {}).get("content"):
-                        nonlocal t_first_token
+                        nonlocal t_first_token, token_count
                         if t_first_token is None:
                             t_first_token = time.monotonic()
                             logger.debug("  TTFT={:.2f}s", t_first_token - t_start)
