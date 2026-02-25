@@ -51,19 +51,10 @@ cd orange-translator
 将 `ot` 命令安装到 `~/.local/bin/`，在任意目录可用：
 
 ```bash
-uv tool install .
-```
-
-如需修改代码后立即生效（无需重装），使用可编辑模式：
-
-```bash
-uv tool install . --editable
-```
-
-代码更新后重新安装：
-
-```bash
-uv tool install . --reinstall
+make install      # 标准安装
+make dev          # 可编辑模式（修改代码立即生效，无需重装）
+make reinstall    # 重新安装（更新依赖或版本后使用）
+make uninstall    # 卸载
 ```
 
 如果 `ot` 命令找不到，确认 `~/.local/bin` 已加入 PATH（在 `~/.zshrc` 或 `~/.bashrc` 中添加）：
