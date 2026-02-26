@@ -74,9 +74,14 @@ class TranslationPipeline:
             level="DEBUG", encoding="utf-8", format=log_fmt,
         )
 
-        # 日志 2：持久化到 log/ 目录，自动轮转，永久保留
-        log_dir = Path("log")
-        log_dir.mkdir(exist_ok=True)
+        # 日志 2：持久化日志，自动轮转，永久保留
+        # 默认写到 ~/.local/share/orange-translator/，避免污染任意工作目录
+        # 开发时可设置环境变量 OT_LOG_DIR=log 将日志写到项目 log/ 目录
+        import os
+        log_dir = Path(os.environ["OT_LOG_DIR"]) if "OT_LOG_DIR" in os.environ else (
+            Path.home() / ".local" / "share" / "orange-translator"
+        )
+        log_dir.mkdir(parents=True, exist_ok=True)
         persist_log_id = logger.add(
             log_dir / "ot-translate.log",
             level="DEBUG", encoding="utf-8", format=log_fmt,
