@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from dotenv import load_dotenv
+
+load_dotenv()  # 自动加载当前目录的 .env 文件（不存在时静默忽略）
 
 # 若第一个参数看起来是 epub 文件（而非子命令），自动补全 "translate"
 # 使得 `ot book.epub` 等价于 `ot translate book.epub`

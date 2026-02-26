@@ -17,6 +17,9 @@ log/
 # Cache
 .mypy_cache/
 
+# Local environment overrides
+.env
+
 # Claude local settings
 .claude/
 
