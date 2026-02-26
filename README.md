@@ -63,12 +63,16 @@ make uninstall    # 卸载
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-### 仅在项目目录使用
+### 开发时在项目目录运行
+
+无需安装，直接通过 `make ot` 调用：
 
 ```bash
-uv pip install -e .
-uv run ot translate book.epub --from en --to zh
+make ot book.epub
+make ot book.epub --from en --to ja
 ```
+
+等价于 `uv run ot <args>`，日志通过 `.env` 自动写入项目 `log/` 目录（见下方日志说明）。
 
 ## 使用
 
@@ -84,7 +88,10 @@ ollama pull translategemma:4b
 ### CLI
 
 ```bash
-# 基础用法（英 → 中）
+# 简写（使用默认参数：英 → 中）
+ot book.epub
+
+# 完整形式
 ot translate book.epub --from en --to zh
 
 # 指定模型
@@ -148,7 +155,20 @@ book.ot-cache/
 - **全部成功**：翻译完成后缓存目录自动删除
 - **有章节失败**：缓存目录保留，重新运行时自动跳过已成功章节、重翻失败章节
 
-持久化日志保存在 `log/ot-translate.log`（自动轮转，保留最近 10 个文件）。
+**持久化日志**位置取决于运行方式：
+
+| 方式 | 日志位置 |
+|---|---|
+| `ot book.epub`（系统命令） | `~/.local/share/orange-translator/ot-translate.log` |
+| `make ot book.epub`（开发） | `log/ot-translate.log`（项目目录，via `.env`） |
+
+日志自动轮转，保留最近 10 个文件。开发时可用 `make log` 实时查看全局日志。
+
+`.env` 文件（项目根目录，已加入 `.gitignore`）：
+
+```bash
+OT_LOG_DIR=log   # 将日志重定向到项目 log/ 目录
+```
 
 ## 双语样式
 
